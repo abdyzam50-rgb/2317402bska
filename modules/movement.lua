@@ -197,6 +197,29 @@ function Movement.teleportToCave()
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- TELEPORT 5
+-- Teleports to the Lab door. Entering triggers a cutscene; Dialogue.start()
+-- handles skipping it. After the cutscene the player must manually choose
+-- their starter Loomian — the story sequence pauses here and waits for the
+-- caller to signal that the pick is complete before resuming.
+-- ─────────────────────────────────────────────────────────────────────────────
+local LAB_DOOR_CFRAME = CFrame.new(-204.53, 70.01, 190.36)
+
+function Movement.teleportToLab()
+    local hrp = getHRP()
+    if not hrp then
+        warn("[Movement] Could not find HumanoidRootPart for Lab teleport.")
+        return false
+    end
+
+    print("[Movement] Teleporting to Lab door.")
+    hrp.CFrame = LAB_DOOR_CFRAME
+    task.wait(0.1)
+    print("[Movement] Arrived at Lab. Awaiting cutscene/dialogue.")
+    return true
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- SEQUENCE: Floor2 Exit → wait for fade → Mom
 -- Call this to run both teleports back-to-back.
 -- ─────────────────────────────────────────────────────────────────────────────
