@@ -193,11 +193,15 @@ local function runStarterPick()
     print("[Objectives] Starter picker: gap detected — pausing dialogue skipper.")
     if _dialogueModule then _dialogueModule.pause() end
 
-    -- Cycle arrow until pixel matches arrow color (or max cycles reached)
-    task.wait(1)
+    -- Wait for screen to fully render before first pixel read
+    task.wait(2)
     for i = 1, STARTER_MAX_CYCLES do
-        if pixelMatchesArrow(STARTER_ARROW_X, STARTER_ARROW_Y) then
-            print("[Objectives] Starter picker: arrow color matched at cycle " .. i)
+        -- Read pixel twice with a short gap to avoid false negatives mid-animation
+        local match1 = pixelMatchesArrow(STARTER_ARROW_X, STARTER_ARROW_Y)
+        task.wait(0.1)
+        local match2 = pixelMatchesArrow(STARTER_ARROW_X, STARTER_ARROW_Y)
+        if match1 and match2 then
+            print("[Objectives] Starter picker: arrow color confirmed at cycle " .. i)
             break
         end
         print("[Objectives] Starter picker: cycling arrow (attempt " .. i .. ")")
