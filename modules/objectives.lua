@@ -147,11 +147,12 @@ end
 local STARTER_ARROW_X,   STARTER_ARROW_Y   = 206, 330  -- 272 + 58
 local STARTER_SELECT_X,  STARTER_SELECT_Y  = 672, 503  -- 445 + 58
 local STARTER_CONFIRM_X, STARTER_CONFIRM_Y = 824, 252  -- 194 + 58
+local STARTER_COLOUR_X,  STARTER_COLOUR_Y  = 778, 98   -- dedicated colour-check spot
 local STARTER_DIALOGUE_GAP  = 60   -- seconds of silence before picking
 local STARTER_WAIT_TIMEOUT  = 120  -- give up after 2 minutes
--- Target arrow color (gray) and tolerance
-local ARROW_R, ARROW_G, ARROW_B = 160, 155, 150
-local ARROW_TOLERANCE = 40
+-- Target colour (light blue-gray of the panel at 778,98) and tolerance
+local ARROW_R, ARROW_G, ARROW_B = 200, 212, 218
+local ARROW_TOLERANCE = 15
 local STARTER_MAX_CYCLES = 50
 
 local _dialogueModule = nil
@@ -196,12 +197,12 @@ local function runStarterPick()
     -- Wait for screen to fully render before first pixel read
     task.wait(2)
     for i = 1, STARTER_MAX_CYCLES do
-        -- Read pixel twice with a short gap to avoid false negatives mid-animation
-        local match1 = pixelMatchesArrow(STARTER_ARROW_X, STARTER_ARROW_Y)
+        -- Read the dedicated colour-check spot twice with a short gap
+        local match1 = pixelMatchesArrow(STARTER_COLOUR_X, STARTER_COLOUR_Y)
         task.wait(0.1)
-        local match2 = pixelMatchesArrow(STARTER_ARROW_X, STARTER_ARROW_Y)
+        local match2 = pixelMatchesArrow(STARTER_COLOUR_X, STARTER_COLOUR_Y)
         if match1 and match2 then
-            print("[Objectives] Starter picker: arrow color confirmed at cycle " .. i)
+            print("[Objectives] Starter picker: colour confirmed at cycle " .. i)
             break
         end
         print("[Objectives] Starter picker: cycling arrow (attempt " .. i .. ")")
