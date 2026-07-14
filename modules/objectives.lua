@@ -160,7 +160,12 @@ local function vim_click(x, y)
     VirtualInputManager:SendMouseButtonEvent(x, y, 0, true,  game, 0)
     task.wait(0.2)
     VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
-    task.wait(0.3)  -- debounce: let UI settle before next input
+    task.wait(0.3)
+end
+
+local function vim_click_once(x, y)
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    task.wait(0.3)
 end
 
 local function pixelMatchesArrow(x, y)
@@ -200,10 +205,10 @@ local function runStarterPick()
         task.wait(1)
     end
 
-    vim_click(STARTER_SELECT_X, STARTER_SELECT_Y)
+    vim_click_once(STARTER_SELECT_X, STARTER_SELECT_Y)
     print("[Objectives] Starter picker: selected.")
     task.wait(1)
-    vim_click(STARTER_CONFIRM_X, STARTER_CONFIRM_Y)
+    vim_click_once(STARTER_CONFIRM_X, STARTER_CONFIRM_Y)
     print("[Objectives] Starter picker: confirmed.")
     task.wait(1)
 
