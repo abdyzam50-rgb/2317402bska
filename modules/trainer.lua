@@ -15,7 +15,7 @@ local localPlayer = Players.LocalPlayer
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Trainer 69 is the known repeatable trainer — add others here if discovered
 -- ─────────────────────────────────────────────────────────────────────────────
-local REPEATABLE = { [69] = true }
+local REPEATABLE = { [69] = true, [16] = true }
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Fought-trainer tracking — persisted to a Workspace folder this session
