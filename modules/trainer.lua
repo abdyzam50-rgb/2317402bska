@@ -1,69 +1,28 @@
 -- trainer.lua
 -- Scans the current chunk for all trainers, teleports to the closest one,
--- fights them via BattleClient:doTrainerBattle, waits for the battle to end,
--- then waits for heal to complete before repeating.
--- One-time trainers are tracked in a Workspace folder and skipped after defeat.
--- Repeatable trainers (e.g. id 69) are never skipped.
+-- fights them, waits for battle end + heal, then repeats.
+--
+-- One-time trainers are skipped after defeat (persisted in Workspace).
+-- "Too strong" trainers (lost without defeating any opponent Loomian) are
+-- skipped until player level >= trainer's highest Loomian level + 3.
+-- Repeatable trainers (16, 69) are never permanently skipped but still
+-- obey the "too strong" cooldown.
+-- Stops entirely when player reaches level 20.
 
 local Trainer = {}
 
-local Players    = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local Workspace  = game:GetService("Workspace")
-local localPlayer = Players.LocalPlayer
+local Players         = game:GetService("Players")
+local RunService      = game:GetService("RunService")
+local Workspace       = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local localPlayer     = Players.LocalPlayer
+
+local STOP_LEVEL = 20
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Trainer 69 is the known repeatable trainer — add others here if discovered
+-- Known repeatable trainers — never permanently marked as fought
 -- ─────────────────────────────────────────────────────────────────────────────
-local REPEATABLE = { [69] = true, [16] = true }
-
--- ─────────────────────────────────────────────────────────────────────────────
--- Fought-trainer tracking — persisted to a Workspace folder this session
--- ─────────────────────────────────────────────────────────────────────────────
-local FOLDER_NAME = "MacroFoughtTrainers"
-
-local function getFoughtFolder()
-    local folder = Workspace:FindFirstChild(FOLDER_NAME)
-    if not folder then
-        folder = Instance.new("Folder")
-        folder.Name = FOLDER_NAME
-        folder.Parent = Workspace
-    end
-    return folder
-end
-
-local function loadFoughtFromWorkspace()
-    local fought = {}
-    local folder = Workspace:FindFirstChild(FOLDER_NAME)
-    if folder then
-        for _, v in ipairs(folder:GetChildren()) do
-            local id = tonumber(v.Name)
-            if id then fought[id] = true end
-        end
-    end
-    return fought
-end
-
-local foughtTrainers = loadFoughtFromWorkspace()
-
-local function markFought(id)
-    if REPEATABLE[id] then return end  -- never mark repeatable trainers
-    foughtTrainers[id] = true
-    -- Persist to workspace folder
-    local folder = getFoughtFolder()
-    if not folder:FindFirstChild(tostring(id)) then
-        local tag = Instance.new("BoolValue")
-        tag.Name  = tostring(id)
-        tag.Value = true
-        tag.Parent = folder
-    end
-    print("[Trainer] Marked trainer " .. id .. " as fought (one-time).")
-end
-
-local function hasFought(id)
-    if REPEATABLE[id] then return false end
-    return foughtTrainers[id] == true
-end
+local REPEATABLE = { [16] = true, [69] = true }
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- _p shared cache
@@ -117,7 +76,119 @@ local function safeGet(obj, key)
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Helpers
+-- Workspace persistence helpers
+-- ─────────────────────────────────────────────────────────────────────────────
+
+local FOUGHT_FOLDER   = "MacroFoughtTrainers"
+local TOOSTRONG_FOLDER = "MacroTooStrong"
+
+local function getOrCreateFolder(name)
+    local f = Workspace:FindFirstChild(name)
+    if not f then
+        f = Instance.new("Folder")
+        f.Name = name
+        f.Parent = Workspace
+    end
+    return f
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Fought-trainer tracking
+-- ─────────────────────────────────────────────────────────────────────────────
+
+local foughtTrainers = {}
+
+local function loadFought()
+    local folder = Workspace:FindFirstChild(FOUGHT_FOLDER)
+    if not folder then return end
+    for _, v in ipairs(folder:GetChildren()) do
+        local id = tonumber(v.Name)
+        if id then foughtTrainers[id] = true end
+    end
+end
+
+local function markFought(id)
+    if REPEATABLE[id] then return end
+    foughtTrainers[id] = true
+    local folder = getOrCreateFolder(FOUGHT_FOLDER)
+    if not folder:FindFirstChild(tostring(id)) then
+        local tag = Instance.new("BoolValue")
+        tag.Name   = tostring(id)
+        tag.Value  = true
+        tag.Parent = folder
+    end
+    print("[Trainer] Trainer " .. id .. " marked as fought (one-time).")
+end
+
+local function hasFought(id)
+    if REPEATABLE[id] then return false end
+    return foughtTrainers[id] == true
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- "Too strong" tracking
+-- ─────────────────────────────────────────────────────────────────────────────
+
+local tooStrong = {}  -- [id] = highestLevel
+
+local function loadTooStrong()
+    local folder = Workspace:FindFirstChild(TOOSTRONG_FOLDER)
+    if not folder then return end
+    for _, v in ipairs(folder:GetChildren()) do
+        local id  = tonumber(v.Name)
+        local lvl = tonumber(v.Value)
+        if id and lvl then tooStrong[id] = lvl end
+    end
+end
+
+local function saveTooStrong(id, highestLevel)
+    tooStrong[id] = highestLevel
+    local folder = getOrCreateFolder(TOOSTRONG_FOLDER)
+    local existing = folder:FindFirstChild(tostring(id))
+    if existing then
+        existing.Value = highestLevel
+    else
+        local iv = Instance.new("IntValue")
+        iv.Name   = tostring(id)
+        iv.Value  = highestLevel
+        iv.Parent = folder
+    end
+end
+
+local function isTooStrong(id)
+    local highestLevel = tooStrong[id]
+    if not highestLevel then return false end
+    local ourLevel = _G.StarterLevel or 1
+    return ourLevel < highestLevel + 3
+end
+
+local function getRequiredLevel(id)
+    local highestLevel = tooStrong[id]
+    return highestLevel and (highestLevel + 3) or nil
+end
+
+-- Deep-scan trainerData table for the highest Loomian level value
+local function getTrainerHighestLevel(trainerData)
+    local highest = 1
+    local visited = {}
+    local function scan(t, depth)
+        if depth > 10 or type(t) ~= "table" or visited[t] then return end
+        visited[t] = true
+        for k, v in pairs(t) do
+            if (k == "level" or k == "Level" or k == "lv" or k == "Lv") then
+                local n = tonumber(v)
+                if n and n > highest then highest = n end
+            elseif type(v) == "table" then
+                scan(v, depth + 1)
+            end
+        end
+    end
+    pcall(scan, trainerData, 0)
+    return highest
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Core helpers
 -- ─────────────────────────────────────────────────────────────────────────────
 
 local function getCurrentBattle()
@@ -149,13 +220,56 @@ local function isFullHealth()
     return ok and result == true
 end
 
+local function getPlayerPosition()
+    local char = localPlayer.Character
+    if not char then return nil end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    return hrp and hrp.Position or nil
+end
+
+local function ourLevel()
+    return _G.StarterLevel or 1
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Opponent KO tracking — monitor BattleGui.opponentMonster health
+-- ─────────────────────────────────────────────────────────────────────────────
+
+local opponentFainted      = 0   -- KOs scored this battle
+local lastOpponentHealth   = nil
+
+local function resetBattleTracking()
+    opponentFainted    = 0
+    lastOpponentHealth = nil
+end
+
+local function tickOpponentTracking()
+    local p = getP()
+    if type(p) ~= "table" then return end
+    local battleGui = safeGet(p, "BattleGui")
+    if type(battleGui) ~= "table" then return end
+
+    local oppMon = safeGet(battleGui, "opponentMonster")
+        or safeGet(battleGui, "enemyMonster")
+        or safeGet(battleGui, "opponent")
+    if type(oppMon) ~= "table" then return end
+
+    local hp = tonumber(safeGet(oppMon, "health") or safeGet(oppMon, "hp") or safeGet(oppMon, "HP"))
+    if not hp then return end
+
+    if lastOpponentHealth and lastOpponentHealth > 0 and hp <= 0 then
+        opponentFainted = opponentFainted + 1
+        print("[Trainer] Opponent Loomian fainted (total this battle: " .. opponentFainted .. ")")
+    end
+    lastOpponentHealth = hp
+end
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Wait helpers
 -- ─────────────────────────────────────────────────────────────────────────────
 
 local function waitForBattleEnd(timeout)
-    timeout = timeout or 300
-    local deadline = tick() + timeout
+    local deadline = tick() + (timeout or 300)
     while tick() < deadline do
         if not getCurrentBattle() then return true end
         task.wait(0.1)
@@ -164,8 +278,7 @@ local function waitForBattleEnd(timeout)
 end
 
 local function waitForFullHealth(timeout)
-    timeout = timeout or 30
-    local deadline = tick() + timeout
+    local deadline = tick() + (timeout or 30)
     while tick() < deadline do
         if isFullHealth() then return true end
         task.wait(0.5)
@@ -174,12 +287,11 @@ local function waitForFullHealth(timeout)
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- NPC position extraction
+-- NPC position
 -- ─────────────────────────────────────────────────────────────────────────────
 
 local function getNPCPosition(npc)
     if not npc then return nil end
-    -- Instance path: Model with PrimaryPart or HumanoidRootPart
     local ok, pos = pcall(function()
         if typeof(npc) == "Instance" then
             local hrp = npc:FindFirstChild("HumanoidRootPart")
@@ -187,7 +299,6 @@ local function getNPCPosition(npc)
             if hrp then return hrp.Position end
             if npc:IsA("Model") then return npc:GetPivot().Position end
         end
-        -- Table path: npc.position / npc.Position / npc.model
         local p = rawget(npc, "position") or rawget(npc, "Position")
         if p then return p end
         local model = rawget(npc, "model") or rawget(npc, "Model")
@@ -200,15 +311,8 @@ local function getNPCPosition(npc)
     return ok and pos or nil
 end
 
-local function getPlayerPosition()
-    local char = localPlayer.Character
-    if not char then return nil end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    return hrp and hrp.Position or nil
-end
-
 -- ─────────────────────────────────────────────────────────────────────────────
--- Scan chunk for all trainers → { id, trainerData, npc, position }
+-- Scan chunk for available trainers
 -- ─────────────────────────────────────────────────────────────────────────────
 
 local function getAllTrainers()
@@ -221,7 +325,6 @@ local function getAllTrainers()
     local battles = safeGet(chunk, "battles")
     if type(battles) ~= "table" then return {} end
 
-    -- Build id → npc map from chunk NPCs
     local npcByBattleId = {}
     pcall(function()
         local npcs = chunk:GetNPCs()
@@ -229,63 +332,52 @@ local function getAllTrainers()
         for _, npc in pairs(npcs) do
             local battleNum = safeGet(safeGet(npc, "battle"), "num")
             if not battleNum then
-                local iv = typeof(npc) == "Instance"
-                    and npc:FindFirstChild("#Battle") or nil
+                local iv = typeof(npc) == "Instance" and npc:FindFirstChild("#Battle") or nil
                 battleNum = iv and iv.Value
             end
-            if battleNum then
-                npcByBattleId[tonumber(battleNum)] = npc
-            end
+            if battleNum then npcByBattleId[tonumber(battleNum)] = npc end
         end
     end)
 
     local result = {}
     for id, trainerData in pairs(battles) do
         local numId = tonumber(id)
-        if numId and type(trainerData) == "table" and not hasFought(numId) then
+        if numId and type(trainerData) == "table" then
+            -- Skip permanently fought one-time trainers
+            if hasFought(numId) then goto continue end
+            -- Skip trainers that are currently too strong
+            if isTooStrong(numId) then goto continue end
+
             local npc = npcByBattleId[numId]
-            local pos = getNPCPosition(npc)
             table.insert(result, {
                 id          = numId,
                 trainerData = trainerData,
                 npc         = npc,
-                position    = pos,
+                position    = getNPCPosition(npc),
             })
+            ::continue::
         end
     end
     return result
 end
 
--- ─────────────────────────────────────────────────────────────────────────────
--- Find closest trainer to the player
--- ─────────────────────────────────────────────────────────────────────────────
-
 local function findClosestTrainer()
     local trainers = getAllTrainers()
     if #trainers == 0 then return nil end
-
     local playerPos = getPlayerPosition()
     local best, bestDist = nil, math.huge
-
     for _, t in ipairs(trainers) do
-        local dist = math.huge
-        if playerPos and t.position then
-            dist = (t.position - playerPos).Magnitude
-        end
-        if dist < bestDist then
-            bestDist = dist
-            best = t
-        end
+        local dist = (playerPos and t.position) and (t.position - playerPos).Magnitude or math.huge
+        if dist < bestDist then bestDist = dist; best = t end
     end
-
     if best then
-        print(string.format("[Trainer] Closest trainer: id=%d  dist=%.1f", best.id, bestDist))
+        print(string.format("[Trainer] Closest available: id=%d  dist=%.1f", best.id, bestDist))
     end
     return best
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Teleport next to a trainer NPC
+-- Teleport + battle
 -- ─────────────────────────────────────────────────────────────────────────────
 
 local function teleportToTrainer(trainer)
@@ -294,9 +386,26 @@ local function teleportToTrainer(trainer)
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-    -- Land 3 studs above and 2 studs in front of the trainer
     hrp.CFrame = CFrame.new(trainer.position + Vector3.new(0, 3, 2))
     task.wait(0.2)
+end
+
+local function startBattle(trainer)
+    if getCurrentBattle() then return false, "Battle already active." end
+    local p = getP()
+    if type(p) ~= "table" then return false, "no _p" end
+    local battleClient = safeGet(p, "BattleClient") or safeGet(p, "Battle")
+    if type(battleClient) ~= "table" then return false, "no BattleClient" end
+    if not trainer.npc then return false, "no NPC for trainer " .. trainer.id end
+    skipNpcText()
+    pcall(function()
+        battleClient:doTrainerBattle({
+            trainer         = trainer.trainerData,
+            opponentBaseNPC = trainer.npc,
+            skipStartAnim   = true,
+        })
+    end)
+    return true
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -311,7 +420,6 @@ local function dismissSwitchPrompt()
     if type(p) ~= "table" then return end
     local battle = getCurrentBattle()
     if type(battle) ~= "table" or safeGet(battle, "kind") ~= "trainer" then return end
-
     local battleGui = safeGet(p, "BattleGui")
     if type(battleGui) ~= "table" then return end
 
@@ -324,7 +432,6 @@ local function dismissSwitchPrompt()
             yesNo:Fire(false); fired = true
         end
     end)
-
     if not fired then
         pcall(function()
             local playerGui = localPlayer:FindFirstChild("PlayerGui")
@@ -343,32 +450,7 @@ local function dismissSwitchPrompt()
             end
         end)
     end
-
     if fired then lastSwitchDismissAt = os.clock() end
-end
-
--- ─────────────────────────────────────────────────────────────────────────────
--- Start the battle
--- ─────────────────────────────────────────────────────────────────────────────
-
-local function startBattle(trainer)
-    if getCurrentBattle() then return false, "Battle already active." end
-
-    local p = getP()
-    if type(p) ~= "table" then return false, "no _p" end
-    local battleClient = safeGet(p, "BattleClient") or safeGet(p, "Battle")
-    if type(battleClient) ~= "table" then return false, "no BattleClient" end
-    if not trainer.npc then return false, "no NPC for trainer " .. trainer.id end
-
-    skipNpcText()
-    pcall(function()
-        battleClient:doTrainerBattle({
-            trainer         = trainer.trainerData,
-            opponentBaseNPC = trainer.npc,
-            skipStartAnim   = true,
-        })
-    end)
-    return true
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -380,15 +462,18 @@ local running = false
 function Trainer.start()
     if running then return end
     running = true
+    loadFought()
+    loadTooStrong()
     getP()
 
-    -- Fast loop: mid-battle switch prompt + fast-forward
+    -- Fast loop: switch prompt + fast-forward + opponent KO tracking
     task.spawn(function()
         while running do
             skipNpcText()
             local p = getP()
             if getCurrentBattle() then
                 dismissSwitchPrompt()
+                tickOpponentTracking()
                 local battleGui = type(p) == "table" and safeGet(p, "BattleGui") or nil
                 if type(battleGui) == "table" then
                     pcall(function() battleGui.fastForward = true end)
@@ -399,37 +484,92 @@ function Trainer.start()
         end
     end)
 
-    -- Main loop: find closest → teleport → fight → wait → heal → repeat
+    -- Main loop: find → teleport → fight → classify → heal → repeat
     task.spawn(function()
-        print("[Trainer] Auto-trainer started — scanning for nearest trainer.")
+        print("[Trainer] Auto-trainer started. Stop level: " .. STOP_LEVEL)
+
         while running do
+            -- Level 20 cap
+            if ourLevel() >= STOP_LEVEL then
+                print("[Trainer] Level " .. STOP_LEVEL .. " reached — stopping auto-trainer.")
+                running = false
+                return
+            end
+
             if getCurrentBattle() then
                 task.wait(0.5)
             else
                 local trainer = findClosestTrainer()
+
                 if not trainer then
-                    warn("[Trainer] No trainers found in current chunk.")
-                    task.wait(3)
+                    -- All trainers in chunk either fought or too strong
+                    local nextRequired = nil
+                    for id, highLvl in pairs(tooStrong) do
+                        local req = highLvl + 3
+                        if not nextRequired or req < nextRequired then
+                            nextRequired = req
+                        end
+                    end
+                    if nextRequired then
+                        print(string.format(
+                            "[Trainer] No available trainers. Currently lv %d. Waiting for lv %d to unlock more.",
+                            ourLevel(), nextRequired
+                        ))
+                    else
+                        print("[Trainer] No trainers found in current chunk.")
+                    end
+                    task.wait(5)
                 else
+                    local preBattlePos = getPlayerPosition()
                     teleportToTrainer(trainer)
+                    resetBattleTracking()
+
                     local ok, err = startBattle(trainer)
                     if not ok then
                         warn("[Trainer] startBattle failed: " .. tostring(err))
                         task.wait(2)
                     else
-                        print("[Trainer] Battle started vs trainer " .. trainer.id .. " — waiting for end...")
+                        print("[Trainer] Fighting trainer " .. trainer.id .. "...")
                         waitForBattleEnd(300)
                         skipNpcText()
-                        markFought(trainer.id)
-                        -- Let heal module do its job, then confirm full health before next fight
-                        print("[Trainer] Battle done — waiting for full health...")
+                        task.wait(0.3) -- brief window before heal module acts
+
+                        -- Detect if we lost (significant position change = blacked out)
+                        local postBattlePos = getPlayerPosition()
+                        local posChange = (preBattlePos and postBattlePos)
+                            and (postBattlePos - preBattlePos).Magnitude or 0
+                        local weLost = posChange > 50
+
+                        if weLost and opponentFainted == 0 then
+                            -- Lost without taking out a single opponent Loomian = too strong
+                            local highestLevel = getTrainerHighestLevel(trainer.trainerData)
+                            saveTooStrong(trainer.id, highestLevel)
+                            print(string.format(
+                                "[Trainer] Trainer %d is TOO STRONG (highest lv %d). Need lv %d. Skipping for now.",
+                                trainer.id, highestLevel, highestLevel + 3
+                            ))
+                        elseif not weLost then
+                            -- We won — mark one-time trainers as done
+                            if tooStrong[trainer.id] then
+                                -- Previously too strong but we beat them now — clear the flag
+                                tooStrong[trainer.id] = nil
+                                local folder = Workspace:FindFirstChild(TOOSTRONG_FOLDER)
+                                local tag = folder and folder:FindFirstChild(tostring(trainer.id))
+                                if tag then tag:Destroy() end
+                                print("[Trainer] Trainer " .. trainer.id .. " cleared from too-strong list.")
+                            end
+                            markFought(trainer.id)
+                        end
+                        -- If we lost but did KO at least one opponent — hard battle, just retry
+
+                        print("[Trainer] Waiting for full health...")
                         waitForFullHealth(30)
-                        print("[Trainer] Ready — finding next trainer...")
                         task.wait(0.5)
                     end
                 end
             end
         end
+
         print("[Trainer] Auto-trainer stopped.")
     end)
 end
@@ -439,37 +579,57 @@ function Trainer.stop()
     print("[Trainer] Stopped.")
 end
 
--- One-shot: fight the closest trainer right now
 function Trainer.fightNearest()
     local trainer = findClosestTrainer()
-    if not trainer then warn("[Trainer] No trainers found.") return end
+    if not trainer then warn("[Trainer] No trainers available.") return end
     teleportToTrainer(trainer)
+    resetBattleTracking()
     local ok, err = startBattle(trainer)
     if not ok then warn("[Trainer] fightNearest failed: " .. tostring(err)) end
 end
 
--- List all trainers in the current chunk (for debugging)
 function Trainer.listTrainers()
-    local trainers = getAllTrainers()
+    local all = {}
+    local p = getP()
+    local dataManager = type(p) == "table" and safeGet(p, "DataManager") or nil
+    local chunk = dataManager and safeGet(dataManager, "currentChunk")
+    local battles = chunk and safeGet(chunk, "battles") or {}
     local playerPos = getPlayerPosition()
-    print("[Trainer] Found " .. #trainers .. " available trainer(s) in chunk:")
-    for _, t in ipairs(trainers) do
-        local dist = (playerPos and t.position) and
-            string.format("%.1f studs", (t.position - playerPos).Magnitude) or "unknown dist"
-        local tag = REPEATABLE[t.id] and " [REPEATABLE]" or ""
-        print(string.format("  id=%-4d  %s%s  hasNPC=%s", t.id, dist, tag, tostring(t.npc ~= nil)))
+
+    for id, trainerData in pairs(type(battles) == "table" and battles or {}) do
+        local numId = tonumber(id)
+        if numId then
+            local status
+            if hasFought(numId)   then status = "fought"
+            elseif isTooStrong(numId) then
+                status = string.format("too strong (need lv %d)", getRequiredLevel(numId))
+            elseif REPEATABLE[numId] then status = "repeatable"
+            else                      status = "available" end
+            table.insert(all, { id = numId, status = status })
+        end
+    end
+
+    table.sort(all, function(a, b) return a.id < b.id end)
+    print("[Trainer] All trainers in chunk:")
+    for _, t in ipairs(all) do
+        print(string.format("  id=%-4d  %s", t.id, t.status))
     end
 end
 
--- Clear the fought list (resets all one-time trainers for a fresh run)
 function Trainer.clearFought()
     foughtTrainers = {}
-    local folder = Workspace:FindFirstChild(FOLDER_NAME)
-    if folder then folder:Destroy() end
-    print("[Trainer] Fought trainer list cleared.")
+    local f = Workspace:FindFirstChild(FOUGHT_FOLDER)
+    if f then f:Destroy() end
+    print("[Trainer] Fought list cleared.")
 end
 
--- Mark a trainer ID as repeatable at runtime
+function Trainer.clearTooStrong()
+    tooStrong = {}
+    local f = Workspace:FindFirstChild(TOOSTRONG_FOLDER)
+    if f then f:Destroy() end
+    print("[Trainer] Too-strong list cleared.")
+end
+
 function Trainer.addRepeatable(id)
     REPEATABLE[tonumber(id)] = true
     print("[Trainer] Trainer " .. tostring(id) .. " marked as repeatable.")
