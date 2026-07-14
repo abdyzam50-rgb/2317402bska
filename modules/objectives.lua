@@ -176,19 +176,25 @@ local function sampleColor(x, y)
         local ok, r, g, b = pcall(readpixel, x, y)
         if ok and r then return r, g, b end
     end
-    -- GUI element fallback: find topmost visible non-transparent element at (x,y)
+    -- GUI element fallback: find topmost visible non-transparent game element at (x,y).
+    -- Skip any ScreenGui with DisplayOrder >= 99999 (executor overlays / scanner tools).
     local best, bestZ = nil, -math.huge
     local function scan(obj)
         for _, child in ipairs(obj:GetChildren()) do
-            if child:IsA("GuiObject") and child.Visible and child.BackgroundTransparency < 1 then
+            -- Skip high-DisplayOrder overlays injected by executors
+            if child:IsA("ScreenGui") and (child.DisplayOrder or 0) >= 99999 then
+                -- don't recurse into overlay guis
+            elseif child:IsA("GuiObject") and child.Visible and child.BackgroundTransparency < 1 then
                 local ap = child.AbsolutePosition
                 local as = child.AbsoluteSize
                 if x >= ap.X and x <= ap.X + as.X and y >= ap.Y and y <= ap.Y + as.Y then
                     local z = child.ZIndex or 1
                     if z > bestZ then bestZ = z; best = child end
                 end
+                scan(child)
+            else
+                scan(child)
             end
-            scan(child)
         end
     end
     scan(playerGui)
