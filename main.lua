@@ -8,11 +8,14 @@ local REPO   = "https://raw.githubusercontent.com/abdyzam50-rgb/2317402bska/" ..
 
 local function loadModule(name)
     local url = REPO .. "/modules/" .. name .. ".lua"
-    local ok, result = pcall(function()
-        return loadstring(game:HttpGet(url))()
-    end)
+    local src = game:HttpGet(url)
+    local chunk, compileErr = loadstring(src)
+    if not chunk then
+        error("[Main] Compile error in '" .. name .. "': " .. tostring(compileErr))
+    end
+    local ok, result = pcall(chunk)
     if not ok or type(result) ~= "table" then
-        error("[Main] Failed to load module '" .. name .. "': " .. tostring(result))
+        error("[Main] Runtime error in '" .. name .. "': " .. tostring(result))
     end
     print("[Main] Loaded: " .. name)
     return result
